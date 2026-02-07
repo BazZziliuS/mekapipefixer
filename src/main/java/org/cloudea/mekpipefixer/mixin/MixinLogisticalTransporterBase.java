@@ -18,14 +18,15 @@ import mekanism.common.content.transporter.TransporterStack;
 /**
  * Core Mixin targeting {@link LogisticalTransporterBase#onUpdateServer()}.
  * <p>
- * Injects at the HEAD of the server tick to manipulate the existing {@code delay}
- * field. When the network is at capacity or idle, the delay is raised so that
- * Mekanism's own pull-section guard ({@code if (delay > 0)}) naturally skips
- * extraction attempts. The transit processing section that follows the pull
- * section is unaffected — items already in transit continue moving normally.
- * <p>
- * This approach avoids cancelling the entire tick and works with Mekanism's
- * built-in exponential backoff rather than fighting it.
+ * Uses two injection points:
+ * <ul>
+ *   <li><b>HEAD</b> — blocks extraction when the network is at capacity.
+ *       This is safe at HEAD because we explicitly want to prevent the pull.</li>
+ *   <li><b>TAIL</b> — applies smart tick scaling <em>after</em> Mekanism has
+ *       already attempted the pull. This avoids the deadlock where idle detection
+ *       prevents pulls, which keeps the network idle forever.</li>
+ * </ul>
+ * The transit processing section is never affected — items in transit keep moving.
  */
 @Mixin(value = LogisticalTransporterBase.class, remap = false)
 public abstract class MixinLogisticalTransporterBase {
@@ -37,21 +38,21 @@ public abstract class MixinLogisticalTransporterBase {
     @Final
     protected Int2ObjectMap<TransporterStack> transit;
 
+    /** Stores the delay value at the start of the tick so TAIL can detect whether a pull was attempted. */
+    @Unique
+    private int mekapipefixer$delayAtHead;
+
     /**
-     * Injected before the body of {@code onUpdateServer()}.
-     * <ul>
-     *   <li><b>Capacity limit + Backpressure:</b> if the network's cached transit count
-     *       meets or exceeds its computed capacity, {@code delay} is forced to at least
-     *       {@code max_cooldown} ticks. This prevents the pull loop from running and
-     *       avoids wasteful extraction/pathfinding work.</li>
-     *   <li><b>Smart tick scaling:</b> if the network is idle (zero items in transit)
-     *       <em>and</em> this transporter's local transit map is empty, {@code delay}
-     *       is raised by {@code idle_multiplier * 10} ticks so the pull check runs
-     *       far less often.</li>
-     * </ul>
+     * HEAD — reconciles cached network data and blocks extraction when at capacity.
+     * <p>
+     * Only sets delay when {@code delay <= 0} (transporter about to pull).
+     * Capacity blocking is safe at HEAD because we want to prevent wasteful
+     * extraction + pathfinding when the network is already full.
      */
     @Inject(method = "onUpdateServer", at = @At("HEAD"))
     private void mekapipefixer$onUpdateServerHead(CallbackInfo ci) {
+        mekapipefixer$delayAtHead = this.delay;
+
         InventoryNetwork network = mekapipefixer$getNetwork();
         if (network == null) {
             return;
@@ -63,17 +64,51 @@ public abstract class MixinLogisticalTransporterBase {
         // Ensure the cached transit/capacity data is fresh
         ctrl.reconcileIfNeeded(network, tick);
 
+        // Only block extraction when the transporter is about to pull
+        if (this.delay > 0) {
+            return;
+        }
+
         // --- Network Capacity Limit + Backpressure ---
         if (MekaPipeFixerConfig.IDLE_BALANCER_ENABLED.get()
                 && ctrl.isAtCapacity(network, tick)) {
-            int cooldown = MekaPipeFixerConfig.MAX_COOLDOWN.get();
-            this.delay = Math.max(this.delay, cooldown);
+            this.delay = MekaPipeFixerConfig.MAX_COOLDOWN.get();
+        }
+    }
+
+    /**
+     * TAIL — applies smart tick scaling after Mekanism has processed the tick.
+     * <p>
+     * Only fires when a pull was actually attempted this tick ({@code delayAtHead <= 0}).
+     * After the pull, if the transporter's local transit is still empty and the
+     * network is idle, the delay is boosted so the next poll happens later.
+     * This lets the pull happen first, avoiding the deadlock where idle detection
+     * blocks pulls which keeps the network idle forever.
+     */
+    @Inject(method = "onUpdateServer", at = @At("TAIL"))
+    private void mekapipefixer$onUpdateServerTail(CallbackInfo ci) {
+        // Only act after a pull attempt (delay was <= 0 at HEAD)
+        if (mekapipefixer$delayAtHead > 0) {
+            return;
         }
 
-        // --- Smart Tick Scaling ---
-        if (MekaPipeFixerConfig.SMART_TICKS_ENABLED.get()
-                && this.transit.isEmpty()
-                && ctrl.isIdle(network, tick)) {
+        if (!MekaPipeFixerConfig.SMART_TICKS_ENABLED.get()) {
+            return;
+        }
+
+        if (!this.transit.isEmpty()) {
+            return;
+        }
+
+        InventoryNetwork network = mekapipefixer$getNetwork();
+        if (network == null) {
+            return;
+        }
+
+        long tick = mekapipefixer$getTick();
+        TransporterNetworkController ctrl = TransporterNetworkController.get();
+
+        if (ctrl.isIdle(network, tick)) {
             int idleDelay = MekaPipeFixerConfig.IDLE_MULTIPLIER.get() * 10;
             this.delay = Math.max(this.delay, idleDelay);
         }

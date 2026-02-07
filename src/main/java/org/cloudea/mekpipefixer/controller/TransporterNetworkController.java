@@ -130,7 +130,7 @@ public final class TransporterNetworkController {
     private static final class NetworkData {
         int transitCount;
         int capacity;
-        long lastRefreshTick = Long.MIN_VALUE;
+        long lastRefreshTick = Long.MIN_VALUE / 2;
     }
 
     private TransporterNetworkController() {}
