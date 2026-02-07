@@ -1,0 +1,39 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+issueTrackerURL="https://github.com/bazzzilius/mekapipefixer/issues"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+authors="BazZziliuS"
+description='''
+Optimizes Mekanism Logistical Transporter networks by adding pressure-aware flow control.
+Reduces TPS impact of large item transport systems without changing gameplay.
+'''
+
+[[mixins]]
+config="${mod_id}.mixins.json"
+
+[[dependencies.${mod_id}]]
+    modId="neoforge"
+    type="required"
+    versionRange="[${neo_version},)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    type="required"
+    versionRange="${minecraft_version_range}"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="mekanism"
+    type="required"
+    reason="Required for Mixin targets — Logistical Transporter classes"
+    versionRange="[10.7,)"
+    ordering="AFTER"
+    side="BOTH"

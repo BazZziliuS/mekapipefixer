@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "org.cloudea.mekpipefixer.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "MixinLogisticalTransporterBase"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
